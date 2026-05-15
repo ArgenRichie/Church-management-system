@@ -361,6 +361,46 @@ if (isset($_POST['delete_ministry'])) {
     header('Location: ?page=ministries&msg='.urlencode('Ministry deleted.')); exit;
 }
 
+// USERS (admin only)
+if (isset($_POST['add_user']) && $_SESSION['urole']==='admin') {
+    $fname    = trim($_POST['new_full_name']);
+    $uname    = strtolower(trim($_POST['new_username']));
+    $pwd      = $_POST['new_password'];
+    $role     = $_POST['new_role'] ?? 'staff';
+    if (empty($fname)||empty($uname)||empty($pwd)) {
+        $user_error = 'All fields are required.';
+    } elseif (!preg_match('/^[a-z0-9_]+$/', $uname)) {
+        $user_error = 'Username: letters, numbers, underscores only.';
+    } elseif (strlen($pwd)<6) {
+        $user_error = 'Password must be at least 6 characters.';
+    } else {
+        $chk=$conn->prepare("SELECT id FROM users WHERE username=?");
+        $chk->bind_param('s',$uname); $chk->execute(); $chk->store_result();
+        if ($chk->num_rows>0) { $user_error='Username already taken.'; }
+        else {
+            $hash=password_hash($pwd,PASSWORD_DEFAULT);
+            $ins=$conn->prepare("INSERT INTO users (full_name,username,password,role) VALUES (?,?,?,?)");
+            $ins->bind_param('ssss',$fname,$uname,$hash,$role); $ins->execute();
+            header('Location: ?page=users&msg='.urlencode('User created successfully!')); exit;
+        }
+    }
+}
+if (isset($_POST['delete_user']) && $_SESSION['urole']==='admin') {
+    $id=intval($_POST['delete_user']);
+    if ($id !== intval($_SESSION['uid'])) {
+        $conn->query("DELETE FROM users WHERE id=$id");
+    }
+    header('Location: ?page=users&msg='.urlencode('User deleted.')); exit;
+}
+if (isset($_POST['change_role']) && $_SESSION['urole']==='admin') {
+    $id=intval($_POST['role_user_id']);
+    $role=$_POST['role_value']==='admin'?'admin':'staff';
+    if ($id !== intval($_SESSION['uid'])) {
+        $conn->query("UPDATE users SET role='$role' WHERE id=$id");
+    }
+    header('Location: ?page=users&msg='.urlencode('Role updated.')); exit;
+}
+
 // ── Page setup ─────────────────────────────────────────────────────────────
 $page    = $_GET['page'] ?? 'dashboard';
 $message = isset($_GET['msg']) ? htmlspecialchars($_GET['msg']) : $message;
@@ -380,6 +420,8 @@ if($page==='edit_member'   &&isset($_GET['id'])){$id=intval($_GET['id']);$edit_m
 if($page==='edit_event'    &&isset($_GET['id'])){$id=intval($_GET['id']);$edit_event    =$conn->query("SELECT * FROM events     WHERE id=$id")->fetch_assoc();if(!$edit_event)    {header('Location: ?page=events');exit;}}
 if($page==='edit_sermon'   &&isset($_GET['id'])){$id=intval($_GET['id']);$edit_sermon   =$conn->query("SELECT * FROM sermons    WHERE id=$id")->fetch_assoc();if(!$edit_sermon)   {header('Location: ?page=sermons');exit;}}
 if($page==='edit_ministry' &&isset($_GET['id'])){$id=intval($_GET['id']);$edit_ministry =$conn->query("SELECT * FROM ministries WHERE id=$id")->fetch_assoc();if(!$edit_ministry) {header('Location: ?page=ministries');exit;}}
+// Guard users page — admin only
+if($page==='users' && $_SESSION['urole']!=='admin'){header('Location: ?page=dashboard');exit;}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -509,6 +551,10 @@ if($page==='edit_ministry' &&isset($_GET['id'])){$id=intval($_GET['id']);$edit_m
     <a href="?page=events"     class="nav-link <?= in_array($page,['events','add_event','edit_event'])?'active':'' ?>"><span class="icon">📅</span><span>Events</span></a>
     <a href="?page=sermons"    class="nav-link <?= in_array($page,['sermons','add_sermon','edit_sermon'])?'active':'' ?>"><span class="icon">📖</span><span>Sermons</span></a>
     <a href="?page=ministries" class="nav-link <?= in_array($page,['ministries','add_ministry','edit_ministry'])?'active':'' ?>"><span class="icon">🙏</span><span>Ministries</span></a>
+    <?php if($_SESSION['urole']==='admin'): ?>
+    <div class="nav-section">Admin</div>
+    <a href="?page=users" class="nav-link <?= $page==='users'?'active':'' ?>"><span class="icon">🔑</span><span>Manage Users</span></a>
+    <?php endif; ?>
   </nav>
   <div class="sidebar-footer">
     © <?= date('Y') ?> CRCI Dome<br>
@@ -529,7 +575,8 @@ if($page==='edit_ministry' &&isset($_GET['id'])){$id=intval($_GET['id']);$edit_m
           'attendance'=>'Attendance','add_attendance'=>'Record Attendance',
           'events'=>'Events','add_event'=>'Add Event','edit_event'=>'Edit Event',
           'sermons'=>'Sermons','add_sermon'=>'Add Sermon','edit_sermon'=>'Edit Sermon',
-          'ministries'=>'Ministries','add_ministry'=>'Add Ministry','edit_ministry'=>'Edit Ministry'];
+          'ministries'=>'Ministries','add_ministry'=>'Add Ministry','edit_ministry'=>'Edit Ministry',
+          'users'=>'Manage Users'];
         echo $titles[$page]??'Dashboard';
       ?></div>
     </div>
@@ -924,6 +971,78 @@ if($page==='edit_ministry' &&isset($_GET['id'])){$id=intval($_GET['id']);$edit_m
           <button type="submit" name="edit_ministry" class="btn btn-red">Update Ministry</button>
           <a href="?page=ministries" class="btn btn-outline">Cancel</a>
         </form>
+      </div>
+
+    <?php /* ═══ USERS MANAGEMENT ═══ */ elseif($page==='users'): ?>
+      <div class="page-header"><h2>Manage Users</h2></div>
+
+      <?php if(isset($user_error)):?><div class="alert" style="background:#fde8eb;border-color:#f5c6cb;color:#8B0F1E;">⚠️ <?=htmlspecialchars($user_error)?></div><?php endif;?>
+
+      <!-- Add New User Form -->
+      <div class="form-card" style="margin-bottom:28px;">
+        <div class="form-section">Add New User</div>
+        <form method="POST">
+          <div class="form-grid">
+            <div class="form-group"><label>Full Name *</label><input type="text" name="new_full_name" required placeholder="e.g. Ama Owusu"></div>
+            <div class="form-group"><label>Username *</label><input type="text" name="new_username" required placeholder="e.g. ama_staff">
+              <small style="color:var(--text-muted);font-size:0.72rem;">Letters, numbers, underscores only</small>
+            </div>
+            <div class="form-group"><label>Password *</label><input type="password" name="new_password" required placeholder="Min. 6 characters"></div>
+            <div class="form-group"><label>Role</label>
+              <select name="new_role">
+                <option value="staff">Staff</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+          </div><br>
+          <button type="submit" name="add_user" class="btn btn-red">Create User</button>
+        </form>
+      </div>
+
+      <!-- Users List -->
+      <div class="table-wrap">
+        <div class="table-toolbar">
+          <span style="font-weight:700;color:var(--blue);font-size:.9rem;">🔑 All System Users</span>
+          <span style="font-size:.8rem;color:var(--text-muted);"><?=$conn->query("SELECT COUNT(*) c FROM users")->fetch_assoc()['c']?> users total</span>
+        </div>
+        <table>
+          <thead><tr><th>#</th><th>Full Name</th><th>Username</th><th>Role</th><th>Created</th><th>Action</th></tr></thead>
+          <tbody>
+          <?php $allusers=$conn->query("SELECT * FROM users ORDER BY created_at ASC");$i=1;
+            while($u=$allusers->fetch_assoc()):$isMe=($u['id']==intval($_SESSION['uid']));?>
+          <tr>
+            <td style="color:var(--text-muted);font-size:.8rem;"><?=$i++?></td>
+            <td><strong><?=htmlspecialchars($u['full_name'])?></strong><?php if($isMe):?> <span class="badge badge-green">You</span><?php endif;?></td>
+            <td><code style="background:var(--cream);padding:3px 8px;border-radius:5px;font-size:.82rem;"><?=htmlspecialchars($u['username'])?></code></td>
+            <td>
+              <?php if(!$isMe):?>
+              <form method="POST" style="display:inline-flex;align-items:center;gap:6px;">
+                <input type="hidden" name="role_user_id" value="<?=$u['id']?>">
+                <select name="role_value" onchange="this.form.submit()" style="padding:4px 8px;font-size:.78rem;border-radius:6px;border:1.5px solid var(--border);">
+                  <option value="staff" <?=$u['role']==='staff'?'selected':''?>>Staff</option>
+                  <option value="admin" <?=$u['role']==='admin'?'selected':''?>>Admin</option>
+                </select>
+                <button type="submit" name="change_role" style="display:none;"></button>
+              </form>
+              <?php else:?>
+                <span class="badge badge-blue"><?=$u['role']?></span>
+              <?php endif;?>
+            </td>
+            <td style="font-size:.8rem;color:var(--text-muted);"><?=date('M d, Y',strtotime($u['created_at']))?></td>
+            <td>
+              <?php if(!$isMe):?>
+              <form class="del-form" method="POST" onsubmit="return confirm('Delete user <?=htmlspecialchars(addslashes($u['full_name']))?> permanently?')">
+                <input type="hidden" name="delete_user" value="<?=$u['id']?>">
+                <button type="submit" class="btn-del">🗑 Delete</button>
+              </form>
+              <?php else:?>
+                <span style="font-size:.78rem;color:var(--text-muted);">—</span>
+              <?php endif;?>
+            </td>
+          </tr>
+          <?php endwhile;?>
+          </tbody>
+        </table>
       </div>
 
     <?php endif;?>
